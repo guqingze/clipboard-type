@@ -18,15 +18,18 @@ export default async function Command() {
     average: { min: 0.02, max: 0.1 },
     fast: { min: 0.01, max: 0.05 },
     "very-fast": { min: 0.005, max: 0.02 },
-    "super-human": { min: 0.001, max: 0.0 },
+    "super-human": { min: 0, max: 0.001 },
   };
 
-  const humanCadenceRange = humanCadenceSpeeds[humanCadenceSpeed];
-
-  const delayString = `(random number from ${humanCadenceRange.min} to ${humanCadenceRange.max})`;
+  const humanCadenceRange = humanCadenceSpeeds[humanCadenceSpeed] ?? humanCadenceSpeeds.average;
 
   const appleScriptContent = `
-set theText to the clipboard as text
+on run argv
+set theText to item 1 of argv
+set shouldUseCadence to item 2 of argv is "true"
+set minDelay to item 3 of argv as real
+set maxDelay to item 4 of argv as real
+
 delay 0.2
 tell application "System Events"
   repeat with ch in characters of theText
@@ -38,14 +41,22 @@ tell application "System Events"
     else
       keystroke c
     end if
-    ${humanCadence ? `delay ${delayString}` : ""}
+
+    if shouldUseCadence then
+      delay (random number from minDelay to maxDelay)
+    end if
   end repeat
 end tell
+end run
 `;
 
   // Execute the AppleScript using osascript directly
   try {
-    await runAppleScript(appleScriptContent);
+    await runAppleScript(
+      appleScriptContent,
+      [latestClipboardItem, String(humanCadence), String(humanCadenceRange.min), String(humanCadenceRange.max)],
+      { timeout: 0 },
+    );
   } catch (error) {
     await showFailureToast(error);
   }
