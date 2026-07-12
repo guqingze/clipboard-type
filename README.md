@@ -8,8 +8,8 @@
 
 **Features:**
 
-- **Type Clipboard Command**: Reads the latest text from your clipboard and types it out character by character.
+- **Type Clipboard Command**: Reads the latest text from your clipboard and types it out as simulated keystrokes.
 - **VM-Safe Keycodes by Default**: Uses US/ANSI keycode mappings for ASCII characters to improve reliability in virtual desktops like Amazon WorkSpaces.
 - **Smart Formatting**: Correctly handles newlines and tabs with explicit key codes and normalizes mixed line endings.
 - **Unicode Fallback**: Falls back to regular keystrokes for non-ASCII characters.
-- **Configurable Speed**: Choose a preset typing delay (dropdown from 1s down to 0.5ms, default 2ms) to match slow remote sessions or fast local input.
+- **Human Cadence** _(optional, on by default)_: Adds a random delay between keystrokes to mimic natural typing, at a configurable speed (Very Slow 200 ms down to Super Human 0 ms; default Average 50 ms). Turn it off to type long content much faster — keystrokes are then sent in batches instead of one Apple Event per character.

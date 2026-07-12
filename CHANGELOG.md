@@ -1,5 +1,9 @@
 # Clipboard Type Changelog
 
+## [Faster typing for long clipboard content] 2026-07-12
+
+- Moved character-to-keycode classification into TypeScript and had AppleScript type pre-built batches instead of walking the clipboard text itself. AppleScript's own text/list access turns quadratic once it reads many individual characters, which is what made typing hundreds of lines get disproportionately slower the longer the content (this only applies when Human Cadence is off; cadence still requires per-character delays).
+
 ## [Always VM-safe keycodes] 2026-03-12
 
 - Switched ASCII typing to US/ANSI keycode mapping by default to improve reliability in remote clients like Amazon WorkSpaces.

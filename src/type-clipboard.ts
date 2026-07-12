@@ -1,6 +1,112 @@
 import { Clipboard, closeMainWindow, getPreferenceValues } from "@raycast/api";
 import { runAppleScript, showFailureToast } from "@raycast/utils";
 
+// Single source of truth for character -> US/ANSI keycode mapping. Using
+// explicit keycodes (rather than letting `keystroke` interpret the text)
+// avoids symbol misinterpretation in remote clients like Amazon WorkSpaces.
+// Characters with no mapping (e.g. non-ASCII Unicode) fall back to a literal
+// `keystroke`. This lives here in TypeScript so the AppleScript side never has
+// to walk the clipboard text itself, whose per-character access is O(n^2) in
+// AppleScript and made long content type disproportionately slowly.
+const LETTER_KEY_CODES = [0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6];
+const DIGIT_KEY_CODES = [29, 18, 19, 20, 21, 23, 22, 26, 28, 25];
+const PUNCTUATION_KEY_CODES: Record<number, [keyCode: number, shift: boolean]> = {
+  33: [18, true], // !
+  34: [39, true], // "
+  35: [20, true], // #
+  36: [21, true], // $
+  37: [23, true], // %
+  38: [26, true], // &
+  39: [39, false], // '
+  40: [25, true], // (
+  41: [29, true], // )
+  42: [28, true], // *
+  43: [24, true], // +
+  44: [43, false], // ,
+  45: [27, false], // -
+  46: [47, false], // .
+  47: [44, false], // /
+  58: [41, true], // :
+  59: [41, false], // ;
+  60: [43, true], // <
+  61: [24, false], // =
+  62: [47, true], // >
+  63: [44, true], // ?
+  64: [19, true], // @
+  91: [33, false], // [
+  92: [42, false], // backslash
+  93: [30, false], // ]
+  94: [22, true], // ^
+  95: [27, true], // _
+  96: [50, false], // `
+  123: [33, true], // {
+  124: [42, true], // |
+  125: [30, true], // }
+  126: [50, true], // ~
+};
+
+function mapCharCode(code: number): { keyCode: number; shift: boolean } | null {
+  if (code === 9) return { keyCode: 48, shift: false }; // tab
+  if (code === 10 || code === 13) return { keyCode: 36, shift: false }; // newline / return
+  if (code === 32) return { keyCode: 49, shift: false }; // space
+  if (code >= 97 && code <= 122) return { keyCode: LETTER_KEY_CODES[code - 97], shift: false };
+  if (code >= 65 && code <= 90) return { keyCode: LETTER_KEY_CODES[code - 65], shift: true };
+  if (code >= 48 && code <= 57) return { keyCode: DIGIT_KEY_CODES[code - 48], shift: false };
+  const punctuation = PUNCTUATION_KEY_CODES[code];
+  if (punctuation) return { keyCode: punctuation[0], shift: punctuation[1] };
+  return null;
+}
+
+// Encode the clipboard text as a list of batches the AppleScript side can
+// replay directly:
+//   "T<text>"   -> `keystroke` a literal run (used for unmapped characters)
+//   "U<codes>"  -> `key code {codes}` (unshifted keycodes)
+//   "S<codes>"  -> `key code {codes} using shift down` (shifted keycodes)
+// When `mergeRuns` is true (no Human Cadence) consecutive characters sharing a
+// mode are merged into one batch, collapsing thousands of Apple Events into a
+// handful. When false (Human Cadence), every character is its own batch so the
+// AppleScript loop can insert a delay after each keystroke.
+const MAX_BATCH_LENGTH = 300;
+
+function buildTypingBatches(text: string, mergeRuns: boolean): string[] {
+  const batches: string[] = [];
+  let mode: "text" | "unshift" | "shift" | null = null;
+  let textBuffer = "";
+  let codeBuffer: number[] = [];
+
+  const flush = () => {
+    if (mode === "text" && textBuffer) {
+      batches.push(`T${textBuffer}`);
+    } else if ((mode === "unshift" || mode === "shift") && codeBuffer.length > 0) {
+      batches.push(`${mode === "shift" ? "S" : "U"}${codeBuffer.join(",")}`);
+    }
+    textBuffer = "";
+    codeBuffer = [];
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const mapped = mapCharCode(text.charCodeAt(i));
+    const nextMode = mapped ? (mapped.shift ? "shift" : "unshift") : "text";
+    const bufferIsFull =
+      !mergeRuns ||
+      (nextMode === "text" ? textBuffer.length >= MAX_BATCH_LENGTH : codeBuffer.length >= MAX_BATCH_LENGTH);
+
+    if (nextMode !== mode || bufferIsFull) {
+      flush();
+      mode = nextMode;
+    }
+
+    if (nextMode === "text") {
+      textBuffer += text[i];
+    } else {
+      codeBuffer.push(mapped!.keyCode);
+    }
+  }
+  flush();
+
+  return batches;
+}
+
 export default async function Command() {
   const latestClipboardItem = await Clipboard.readText();
 
@@ -24,197 +130,41 @@ export default async function Command() {
 
   const humanCadenceRange = humanCadenceSpeeds[humanCadenceSpeed] ?? humanCadenceSpeeds.average;
 
+  // Each batch is "<tag><payload>": tag "T" is literal text to `keystroke`,
+  // "U"/"S" are comma-separated keycodes to send unshifted / shifted. When
+  // Human Cadence is on, batches are one character each and a random delay is
+  // inserted after every keystroke.
   const appleScriptContent = `
-property letterKeyCodes : {0, 11, 8, 2, 14, 3, 5, 4, 34, 38, 40, 37, 46, 45, 31, 35, 12, 15, 1, 17, 32, 9, 13, 7, 16, 6}
-property digitKeyCodes : {29, 18, 19, 20, 21, 23, 22, 26, 28, 25}
-
-on mappingForCode(charCode)
-  if charCode is 9 then
-    return {48, false}
-  end if
-
-  if charCode is 10 or charCode is 13 then
-    return {36, false}
-  end if
-
-  if charCode is 32 then
-    return {49, false}
-  end if
-
-  if charCode is greater than or equal to 97 and charCode is less than or equal to 122 then
-    set letterIndex to charCode - 96
-    return {item letterIndex of letterKeyCodes, false}
-  end if
-
-  if charCode is greater than or equal to 65 and charCode is less than or equal to 90 then
-    set letterIndex to charCode - 64
-    return {item letterIndex of letterKeyCodes, true}
-  end if
-
-  if charCode is greater than or equal to 48 and charCode is less than or equal to 57 then
-    set digitIndex to charCode - 47
-    return {item digitIndex of digitKeyCodes, false}
-  end if
-
-  if charCode is 33 then
-    return {18, true}
-  end if
-
-  if charCode is 34 then
-    return {39, true}
-  end if
-
-  if charCode is 35 then
-    return {20, true}
-  end if
-
-  if charCode is 36 then
-    return {21, true}
-  end if
-
-  if charCode is 37 then
-    return {23, true}
-  end if
-
-  if charCode is 38 then
-    return {26, true}
-  end if
-
-  if charCode is 39 then
-    return {39, false}
-  end if
-
-  if charCode is 40 then
-    return {25, true}
-  end if
-
-  if charCode is 41 then
-    return {29, true}
-  end if
-
-  if charCode is 42 then
-    return {28, true}
-  end if
-
-  if charCode is 43 then
-    return {24, true}
-  end if
-
-  if charCode is 44 then
-    return {43, false}
-  end if
-
-  if charCode is 45 then
-    return {27, false}
-  end if
-
-  if charCode is 46 then
-    return {47, false}
-  end if
-
-  if charCode is 47 then
-    return {44, false}
-  end if
-
-  if charCode is 58 then
-    return {41, true}
-  end if
-
-  if charCode is 59 then
-    return {41, false}
-  end if
-
-  if charCode is 60 then
-    return {43, true}
-  end if
-
-  if charCode is 61 then
-    return {24, false}
-  end if
-
-  if charCode is 62 then
-    return {47, true}
-  end if
-
-  if charCode is 63 then
-    return {44, true}
-  end if
-
-  if charCode is 64 then
-    return {19, true}
-  end if
-
-  if charCode is 91 then
-    return {33, false}
-  end if
-
-  if charCode is 92 then
-    return {42, false}
-  end if
-
-  if charCode is 93 then
-    return {30, false}
-  end if
-
-  if charCode is 94 then
-    return {22, true}
-  end if
-
-  if charCode is 95 then
-    return {27, true}
-  end if
-
-  if charCode is 96 then
-    return {50, false}
-  end if
-
-  if charCode is 123 then
-    return {33, true}
-  end if
-
-  if charCode is 124 then
-    return {42, true}
-  end if
-
-  if charCode is 125 then
-    return {30, true}
-  end if
-
-  if charCode is 126 then
-    return {50, true}
-  end if
-
-  return missing value
-end mappingForCode
-
 on run argv
-set theText to item 1 of argv
-set shouldUseCadence to item 2 of argv is "true"
-set minDelay to item 3 of argv as real
-set maxDelay to item 4 of argv as real
+set shouldUseCadence to item 1 of argv is "true"
+set minDelay to item 2 of argv as real
+set maxDelay to item 3 of argv as real
+set batchArgs to items 4 thru -1 of argv
 
 delay 0.2
 tell application "System Events"
-  repeat with ch in characters of theText
-    set c to contents of ch
+  repeat with batchArgRef in batchArgs
+    set batchArg to batchArgRef as text
+    set tag to text 1 thru 1 of batchArg
+    set payload to text 2 thru -1 of batchArg
 
-    set mappedKey to missing value
-    try
-      set mappedKey to my mappingForCode(id of c)
-    on error
-      set mappedKey to missing value
-    end try
-
-    if mappedKey is missing value then
-      keystroke c
+    if tag is "T" then
+      keystroke payload
     else
-      set keyCodeValue to item 1 of mappedKey
-      set shouldPressShift to item 2 of mappedKey
+      set oldDelims to AppleScript's text item delimiters
+      set AppleScript's text item delimiters to ","
+      set codeStrs to text items of payload
+      set AppleScript's text item delimiters to oldDelims
 
-      if shouldPressShift then
-        key code keyCodeValue using shift down
+      set codes to {}
+      repeat with codeStr in codeStrs
+        set end of codes to (codeStr as integer)
+      end repeat
+
+      if tag is "S" then
+        key code codes using shift down
       else
-        key code keyCodeValue
+        key code codes
       end if
     end if
 
@@ -226,13 +176,12 @@ end tell
 end run
 `;
 
+  const batches = buildTypingBatches(normalizedClipboardText, !humanCadence);
+  const args = [String(humanCadence), String(humanCadenceRange.min), String(humanCadenceRange.max), ...batches];
+
   // Execute the AppleScript using osascript directly
   try {
-    await runAppleScript(
-      appleScriptContent,
-      [normalizedClipboardText, String(humanCadence), String(humanCadenceRange.min), String(humanCadenceRange.max)],
-      { timeout: 0 },
-    );
+    await runAppleScript(appleScriptContent, args, { timeout: 0 });
   } catch (error) {
     await showFailureToast(error);
   }
