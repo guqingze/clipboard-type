@@ -12,7 +12,7 @@
 - **VM-Safe Keycodes by Default**: Uses US/ANSI keycode mappings for ASCII characters to improve reliability in virtual desktops like Amazon WorkSpaces.
 - **Smart Formatting**: Correctly handles newlines and tabs with explicit key codes and normalizes mixed line endings.
 - **Unicode Fallback**: Falls back to regular keystrokes for non-ASCII characters.
-- **Human Cadence** _(optional, on by default)_: Adds a random delay between keystrokes to mimic natural typing, at a configurable speed (Very Slow 200 ms down to Super Human 0 ms; default Average 50 ms). Turn it off to type long content much faster — keystrokes are then sent in batches instead of one Apple Event per character.
+- **Human Cadence** _(optional, on by default)_: Adds a random delay between keystrokes to mimic natural typing, at a configurable speed (Very Slow 200 ms down to Super Human 0 ms; default Average 50 ms). This is also the reliability knob for laggy remote sessions — a slower speed gives the remote time to keep up. Turn it off to type as fast as possible; on a slow link, very long content may drop or reorder characters, so prefer leaving it on (at Fast/Very Fast) for large pastes.
 
 ## Fresh Mac Setup
 

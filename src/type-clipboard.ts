@@ -58,17 +58,26 @@ function mapCharCode(code: number): { keyCode: number; shift: boolean } | null {
 }
 
 // Encode the clipboard text as a list of batches the AppleScript side can
-// replay directly:
-//   "T<text>"   -> `keystroke` a literal run (used for unmapped characters)
-//   "U<codes>"  -> `key code {codes}` (unshifted keycodes)
-//   "S<codes>"  -> `key code {codes} using shift down` (shifted keycodes)
-// When `mergeRuns` is true (no Human Cadence) consecutive characters sharing a
-// mode are merged into one batch, collapsing thousands of Apple Events into a
-// handful. When false (Human Cadence), every character is its own batch so the
-// AppleScript loop can insert a delay after each keystroke.
-const MAX_BATCH_LENGTH = 300;
+// replay:
+//   "T<text>"   -> `keystroke` each character (used for unmapped characters)
+//   "U<codes>"  -> `key code <code>` per character (unshifted)
+//   "S<codes>"  -> `key code <code> using shift down` per character (shifted)
+// Batching here is ONLY a transport optimization so we don't hand osascript one
+// argv item per character (which would blow past ARG_MAX on long pastes).
+// Regardless of batch size, the AppleScript side always emits ONE key event per
+// character. An earlier version sent a whole run as a single `key code {list}`
+// action; that burst is what caused characters to arrive dropped/reordered in
+// remote sessions (e.g. Amazon WorkSpaces). Per-character delivery matches the
+// version that typed correctly. Pacing for reliability is Human Cadence's job.
+const MAX_BATCH_LENGTH = 100;
 
-function buildTypingBatches(text: string, mergeRuns: boolean): string[] {
+// Delay after each keystroke when Human Cadence is off: none. This mirrors the
+// last known-correct version, whose only "slowness" came from AppleScript's own
+// O(n^2) character walk (now removed). For reliable long pastes into a laggy
+// remote session, turn Human Cadence on and pick a speed — that is the knob.
+const FAST_KEYSTROKE_DELAY = 0;
+
+function buildTypingBatches(text: string): string[] {
   const batches: string[] = [];
   let mode: "text" | "unshift" | "shift" | null = null;
   let textBuffer = "";
@@ -88,8 +97,7 @@ function buildTypingBatches(text: string, mergeRuns: boolean): string[] {
     const mapped = mapCharCode(text.charCodeAt(i));
     const nextMode = mapped ? (mapped.shift ? "shift" : "unshift") : "text";
     const bufferIsFull =
-      !mergeRuns ||
-      (nextMode === "text" ? textBuffer.length >= MAX_BATCH_LENGTH : codeBuffer.length >= MAX_BATCH_LENGTH);
+      nextMode === "text" ? textBuffer.length >= MAX_BATCH_LENGTH : codeBuffer.length >= MAX_BATCH_LENGTH;
 
     if (nextMode !== mode || bufferIsFull) {
       flush();
@@ -130,18 +138,28 @@ export default async function Command() {
 
   const humanCadenceRange = humanCadenceSpeeds[humanCadenceSpeed] ?? humanCadenceSpeeds.average;
 
-  // Each batch is "<tag><payload>": tag "T" is literal text to `keystroke`,
-  // "U"/"S" are comma-separated keycodes to send unshifted / shifted. When
-  // Human Cadence is on, batches are one character each and a random delay is
-  // inserted after every keystroke.
+  // Each batch is "<tag><payload>". "T" is literal text; "U"/"S" are
+  // comma-separated keycodes. Batches are only a transport grouping — the
+  // loop below always emits ONE key event per character (per-character
+  // `key code`, with Shift applied atomically per shifted character via
+  // `using shift down`). This is the delivery that typed correctly; sending a
+  // run as a single `key code {list}` burst is what corrupted long pastes. A
+  // per-keystroke delay (Human Cadence's random delay, or none when off) is
+  // applied after every character.
   const appleScriptContent = `
 on run argv
 set shouldUseCadence to item 1 of argv is "true"
 set minDelay to item 2 of argv as real
 set maxDelay to item 3 of argv as real
-set batchArgs to items 4 thru -1 of argv
+set keystrokeDelay to item 4 of argv as real
+set batchArgs to items 5 thru -1 of argv
 
 delay 0.2
+-- A long paste (Human Cadence on) can run for many minutes. Without this
+-- guard, AppleScript's default 120-second Apple Event timeout aborts the run
+-- partway through, leaving the content half-typed. 86400s (a day) effectively
+-- disables it for any realistic paste.
+with timeout of 86400 seconds
 tell application "System Events"
   repeat with batchArgRef in batchArgs
     set batchArg to batchArgRef as text
@@ -149,35 +167,48 @@ tell application "System Events"
     set payload to text 2 thru -1 of batchArg
 
     if tag is "T" then
-      keystroke payload
+      repeat with i from 1 to (count of payload)
+        keystroke (character i of payload)
+        my pace(shouldUseCadence, minDelay, maxDelay, keystrokeDelay)
+      end repeat
     else
       set oldDelims to AppleScript's text item delimiters
       set AppleScript's text item delimiters to ","
       set codeStrs to text items of payload
       set AppleScript's text item delimiters to oldDelims
 
-      set codes to {}
+      set useShift to tag is "S"
       repeat with codeStr in codeStrs
-        set end of codes to (codeStr as integer)
+        if useShift then
+          key code (codeStr as integer) using shift down
+        else
+          key code (codeStr as integer)
+        end if
+        my pace(shouldUseCadence, minDelay, maxDelay, keystrokeDelay)
       end repeat
-
-      if tag is "S" then
-        key code codes using shift down
-      else
-        key code codes
-      end if
-    end if
-
-    if shouldUseCadence then
-      delay (random number from minDelay to maxDelay)
     end if
   end repeat
 end tell
+end timeout
 end run
+
+on pace(shouldUseCadence, minDelay, maxDelay, keystrokeDelay)
+  if shouldUseCadence then
+    delay (random number from minDelay to maxDelay)
+  else if keystrokeDelay > 0 then
+    delay keystrokeDelay
+  end if
+end pace
 `;
 
-  const batches = buildTypingBatches(normalizedClipboardText, !humanCadence);
-  const args = [String(humanCadence), String(humanCadenceRange.min), String(humanCadenceRange.max), ...batches];
+  const batches = buildTypingBatches(normalizedClipboardText);
+  const args = [
+    String(humanCadence),
+    String(humanCadenceRange.min),
+    String(humanCadenceRange.max),
+    String(FAST_KEYSTROKE_DELAY),
+    ...batches,
+  ];
 
   // Execute the AppleScript using osascript directly
   try {
