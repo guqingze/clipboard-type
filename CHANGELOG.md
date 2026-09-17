@@ -1,5 +1,11 @@
 # Clipboard Type Changelog
 
+## [Document Tinycast support] 2026-09-17
+
+- Document the same extension bundle working in Raycast and Tinycast, with shortcut typing verified on Tinycast 0.10.23 (build 93).
+- Add standalone build/import instructions, Accessibility and System Events permissions, command shortcuts, preferences, updates, and troubleshooting.
+- Clarify the difference between automated regression checks and manual shortcut or remote-session verification.
+
 ## [Read the current macOS clipboard] 2026-09-17
 
 - Read text directly from the live macOS pasteboard with `pbpaste` so an older Raycast clipboard-history entry cannot replace the current content.
@@ -8,7 +14,7 @@
 
 ## [Fix corrupted long pastes into remote sessions] 2026-07-13
 
-- Long pastes into remote sessions (e.g. Amazon WorkSpaces) could drop or reorder characters near the end of the content. Comparing against the last known-correct version pinpointed the cause: the previous performance change bundled two things — moving keycode mapping into TypeScript (the real, safe speedup) *and* sending each run of keys as a single `key code {list}` burst. That burst is what arrived dropped/reordered over a laggy remote link. Delivery is now back to one key event per character (matching the version that typed correctly), while keeping the TypeScript-mapping speedup. Batching is retained purely as a transport detail (to stay under argv limits) and no longer affects how keys are sent.
+- Long pastes into remote sessions (e.g. Amazon WorkSpaces) could drop or reorder characters near the end of the content. Comparing against the last known-correct version pinpointed the cause: the previous performance change bundled two things — moving keycode mapping into TypeScript (the real, safe speedup) _and_ sending each run of keys as a single `key code {list}` burst. That burst is what arrived dropped/reordered over a laggy remote link. Delivery is now back to one key event per character (matching the version that typed correctly), while keeping the TypeScript-mapping speedup. Batching is retained purely as a transport detail (to stay under argv limits) and no longer affects how keys are sent.
 - For reliable pasting into a laggy remote session, keep Human Cadence on and pick a speed — that is the pacing knob. With Human Cadence off, characters are sent as fast as possible (best effort), which may still corrupt very long content on a slow link.
 - Wrapped the typing loop in `with timeout of 86400 seconds` so long, paced pastes (which can legitimately run for several minutes) are no longer aborted partway through by AppleScript's default 120-second Apple Event timeout.
 
