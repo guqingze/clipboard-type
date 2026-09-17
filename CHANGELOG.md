@@ -1,5 +1,10 @@
 # Clipboard Type Changelog
 
+## [Qualify Tinycast compatibility and document Raycast recovery] 2026-09-17
+
+- Mark Tinycast compatibility experimental after repeated crashes on 0.10.23 (build 93), despite an earlier successful short-text test. Crash reports locate the failure at child-process launch; the underlying trigger remains unconfirmed.
+- Add steps to restore Raycast's compiled command, enable the extension, and avoid shortcut conflicts when switching back.
+
 ## [Document Tinycast support] 2026-09-17
 
 - Document the same extension bundle working in Raycast and Tinycast, with shortcut typing verified on Tinycast 0.10.23 (build 93).

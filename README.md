@@ -6,7 +6,7 @@
 - **Remote Desktop (RDP) & VNC**: Type text into remote sessions where clipboard synchronization is inactive or broken.
 - **Legacy Applications**: Input text into older applications that may not support standard system paste commands.
 
-Works on macOS with **Raycast** or **[Tinycast](https://github.com/abue-ammar/tinycast)**. Both hosts run the same built extension. Tinycast setup and shortcut typing were verified with version **0.10.23 (build 93)** on 16 September 2026; remote-session delivery still depends on the destination app and typing speed.
+Runs on macOS in **Raycast**. **[Tinycast](https://github.com/abue-ammar/tinycast) compatibility is experimental**: a short-text shortcut test succeeded on version **0.10.23 (build 93)** on 16 September 2026, but repeated app crashes were reported the next day. Crash reports show Tinycast aborting while launching a child process; the underlying trigger has not been established. Use Raycast if you encounter these crashes. Remote-session delivery still depends on the destination app and typing speed.
 
 **Features:**
 
@@ -45,6 +45,8 @@ This fork is a locally-loaded (development) extension, not installed from the Ra
 
 ## Tinycast setup
 
+The steps below install the bundle, but do not resolve the known crashes described above.
+
 Install [Tinycast](https://github.com/abue-ammar/tinycast) and [Node.js](https://nodejs.org) (LTS). Node is needed to build the extension; Raycast does not need to be running to use it in Tinycast.
 
 1. **Get the code and dependencies**, or use your existing checkout:
@@ -78,6 +80,18 @@ The build and import workflow follows [Tinycast's extension documentation for v0
 
 - **Raycast**: run `npm run dev` again, then press Ctrl+C once it reloads.
 - **Tinycast**: rerun the standalone build command above, then add the rebuilt folder again. Pulling code or rebuilding the Raycast copy alone does not update Tinycast's copy.
+
+### Switching back to Raycast
+
+1. Quit Tinycast or remove its Type Clipboard shortcut so both launchers do not compete for the same keys.
+2. From this repository, rebuild the Raycast installation:
+
+   ```sh
+   ./node_modules/.bin/ray build -e dev --non-interactive --exit-on-error
+   ```
+
+3. In Raycast settings, enable **Clipboard Type** and confirm the **Type Clipboard** command's hotkey. Migration may have left the extension disabled to release its shortcut.
+4. Test a short sample in TextEdit. If the command is enabled but does nothing, check that `~/.config/raycast/extensions/clipboard-type/type-clipboard.js` exists for the standard Raycast installation. A saved settings entry alone does not mean the compiled command is installed; rebuilding restored this missing file during troubleshooting.
 
 ## If the Tinycast shortcut does nothing
 
