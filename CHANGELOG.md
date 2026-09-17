@@ -1,5 +1,11 @@
 # Clipboard Type Changelog
 
+## [Read the current macOS clipboard] 2026-09-17
+
+- Read text directly from the live macOS pasteboard with `pbpaste` so an older Raycast clipboard-history entry cannot replace the current content.
+- Preserve whitespace and Unicode, support large clipboard text, and report read failures without typing stale content.
+- Add regression tests for long text, line endings and Unicode, and clipboard-read failures.
+
 ## [Fix corrupted long pastes into remote sessions] 2026-07-13
 
 - Long pastes into remote sessions (e.g. Amazon WorkSpaces) could drop or reorder characters near the end of the content. Comparing against the last known-correct version pinpointed the cause: the previous performance change bundled two things — moving keycode mapping into TypeScript (the real, safe speedup) *and* sending each run of keys as a single `key code {list}` burst. That burst is what arrived dropped/reordered over a laggy remote link. Delivery is now back to one key event per character (matching the version that typed correctly), while keeping the TypeScript-mapping speedup. Batching is retained purely as a transport detail (to stay under argv limits) and no longer affects how keys are sent.

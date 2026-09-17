@@ -1,5 +1,6 @@
-import { Clipboard, closeMainWindow, getPreferenceValues } from "@raycast/api";
+import { closeMainWindow, getPreferenceValues } from "@raycast/api";
 import { runAppleScript, showFailureToast } from "@raycast/utils";
+import { execFile } from "node:child_process";
 
 // Single source of truth for character -> US/ANSI keycode mapping. Using
 // explicit keycodes (rather than letting `keystroke` interpret the text)
@@ -116,7 +117,22 @@ function buildTypingBatches(text: string): string[] {
 }
 
 export default async function Command() {
-  const latestClipboardItem = await Clipboard.readText();
+  // Read the live macOS pasteboard directly so a stale Raycast history entry
+  // cannot replace the current text. Keep stdout intact, including whitespace.
+  let latestClipboardItem: string;
+  try {
+    latestClipboardItem = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "/usr/bin/pbpaste",
+        ["-Prefer", "txt"],
+        { encoding: "utf8", env: { ...process.env, LC_ALL: "en_US.UTF-8" }, maxBuffer: 64 * 1024 * 1024 },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+      );
+    });
+  } catch (error) {
+    await showFailureToast(error);
+    return;
+  }
 
   // If clipboard is empty show Toast and return
   if (!latestClipboardItem) {
